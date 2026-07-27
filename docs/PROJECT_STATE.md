@@ -1,6 +1,8 @@
 # Project state
 
-Last updated: 2026-07-26, end of Milestone 2.
+Last updated: 2026-07-27. Milestone 2 is complete, committed, and pushed
+to `origin/main`. Project is paused here — see section 7 for the exact
+resume point.
 
 ## 1. Agreed architecture
 
@@ -154,7 +156,9 @@ from `https://mempool.space/api` and confirmed complete (`tx_count_fetched
   by a spending input inside this narrow slice. Explicitly not a UTXO set.
 - All four Parquet datasets built: 40 partition files total (4 datasets ×
   10 heights) under `data/parquet/`.
-- All output lives under `data/`, which is git-ignored.
+- Both raw data (`data/raw/`) and partitioned Parquet (`data/parquet/`)
+  live entirely under `data/`, which `.gitignore` excludes wholesale —
+  neither raw JSON/JSONL nor Parquet files are ever committed.
 
 ## 5. Edge cases discovered
 
@@ -199,18 +203,33 @@ python scripts/explore_block.py
 python -m pytest
 ```
 
-## 7. Next approved activity
+## 7. Next approved activity — resume point
 
-A **learning walkthrough** of the downloaded 10-block window
-(959744–959753), covering: block height and chain linkage; transaction
-inputs and outputs; fee calculation; size, weight, and vsize; and why many
-inputs reference transactions outside the loaded window. This walkthrough
-has been proposed but not yet delivered — see `docs/LEARNING_LOG.md` for
-what's actually been covered so far (still just Milestone 1's technical
-mechanics, not concept explanations).
+The **teaching walkthrough** of the downloaded 10-block window
+(959744–959753) has started, not finished:
+
+- **Lesson 1 (block height and chain linkage) has been delivered** —
+  explained in plain English with an analogy, connected to the real
+  `block.json` fields (`id`, `height`, `previousblockhash`) and the
+  corresponding `data/parquet/blocks/` columns (`block_hash`,
+  `block_height`, `previous_block_hash`) for blocks 959744–959746 from
+  our own dataset, and closed with five comprehension questions.
+- **The user's answers to those five questions have not yet been given
+  or reviewed.** Comprehension of Lesson 1 is therefore not confirmed —
+  see `docs/LEARNING_LOG.md`, which records that the lesson was taught,
+  not that it was learned.
+
+**Resume by:** reviewing the user's answers to Lesson 1's five questions
+first. Only after that should the walkthrough continue to the next
+topics in order: transaction inputs and outputs; fee calculation; size,
+weight, and vsize; and why many inputs reference transactions outside the
+loaded window. Do not skip ahead to those topics before Lesson 1 is
+actually resolved.
 
 ## 8. Milestone status
 
 **Milestone 3 has not been approved.** No 25–50 block extraction, no
 data-quality-gate formalization, no Snowflake/dbt/Airflow work should be
-started until that approval is given explicitly.
+started until that approval is given explicitly. This is also true
+regardless of how the teaching walkthrough concludes — finishing the
+walkthrough does not itself constitute Milestone 3 approval.

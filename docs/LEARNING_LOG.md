@@ -82,3 +82,32 @@ real numbers, what distinguishes size/weight/vsize, or why so many
 inputs point outside a 10-block window. That walkthrough is the next
 approved activity (see `docs/PROJECT_STATE.md`, section 7) and has not
 happened yet.
+
+## 2026-07-27 — Lesson 1 delivered: block height and chain linkage
+
+**What was taught (not yet confirmed learned):**
+
+- Block height, block hash, and chain tip explained via a "numbered,
+  photocopied ledger page" analogy, including where that analogy breaks
+  down (a ledger page doesn't cryptographically staple itself to the
+  previous page's fingerprint the way `previousblockhash` does).
+- Walked through the real raw `block.json` for blocks 959744 and 959745
+  from our own fetched data, showing `id`/`previousblockhash` matching
+  hash-for-hash across consecutive blocks, and the same fields renamed
+  (`block_hash`/`previous_block_hash`) in `data/parquet/blocks/`.
+- Explained why height alone doesn't uniquely/permanently identify a
+  block (possible temporary forks at the same height), why we fetch
+  ~100 blocks behind tip to sidestep reorg handling, and why block
+  959744's own predecessor (959743) can't be verified from our loaded
+  window — a first concrete example of the observation-boundary idea.
+- Closed with five comprehension questions, not yet answered.
+
+**Explicitly NOT true yet — do not assume this in future sessions:**
+
+This entry records that chain linkage *was explained*, using real data.
+It does **not** record that the user has demonstrated understanding of
+it. The five questions posed at the end of Lesson 1 have not been
+answered or reviewed. Until that happens, treat block height / chain
+linkage as *taught, comprehension unconfirmed* — not as a settled,
+already-learned concept. All other topics (inputs, outputs, fees, size/
+weight/vsize, foreign-window inputs, UTXOs) remain completely untaught.
