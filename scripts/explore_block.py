@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Milestone 1 DuckDB exploration: query raw block/tx files directly.
+"""DuckDB exploration: query raw block/tx files directly.
 
 No copying, no separate database of record -- DuckDB reads block.json and
-txs.jsonl in place under data/raw/blocks/. The glob patterns already work
-across multiple block directories, so this keeps working unchanged once
-later milestones ingest more than one block.
+txs.jsonl in place under data/raw/blocks/. The glob patterns work across
+however many block directories are currently on disk, from one block
+(Milestone 1) up through the current 10-block window (Milestone 2) and
+beyond, unchanged.
+
+The queries in the second half of this script (chain linkage, foreign
+inputs, in-window spends) only become meaningful once more than one block
+is loaded -- with a single block, "previous_block_hash" and "foreign
+input" checks are trivially degenerate.
 
 Usage:
     python scripts/explore_block.py
@@ -97,6 +103,109 @@ def run() -> None:
         ORDER BY idx
         """
     ).show()
+
+    print("=== Chain linkage: does each block's previous_block_hash match the prior block's hash? ===")
+    con.sql(
+        """
+        SELECT height, id AS block_hash, previousblockhash,
+               lag(id) OVER (ORDER BY height) AS prior_block_hash_in_window,
+               previousblockhash = lag(id) OVER (ORDER BY height) AS linked_to_prior
+        FROM blocks
+        ORDER BY height
+        """
+    ).show()
+    print("(NULL/false for the first block just means its predecessor isn't loaded -- not a break.)")
+
+    print("=== Transaction count, total and average fee, by block ===")
+    con.sql(
+        """
+        SELECT status.block_height AS height,
+               count(*) AS tx_count,
+               count(*) FILTER (WHERE NOT vin[1].is_coinbase) AS ordinary_tx_count,
+               sum(fee) FILTER (WHERE NOT vin[1].is_coinbase) AS total_fees_sats,
+               round(avg(fee) FILTER (WHERE NOT vin[1].is_coinbase), 1) AS avg_fee_sats
+        FROM transactions
+        GROUP BY status.block_height
+        ORDER BY height
+        """
+    ).show()
+
+    print("=== Average and maximum block weight across the loaded window ===")
+    con.sql(
+        """
+        SELECT round(avg(weight), 1) AS avg_weight_units, max(weight) AS max_weight_units,
+               round(avg(size), 1) AS avg_size_bytes, max(size) AS max_size_bytes
+        FROM blocks
+        """
+    ).show()
+
+    print("=== Average transaction size, weight, and vsize across the loaded window ===")
+    con.sql(
+        """
+        SELECT round(avg(size), 1) AS avg_size_bytes,
+               round(avg(weight), 1) AS avg_weight_units,
+               round(avg(ceil(weight / 4.0)), 1) AS avg_vsize
+        FROM transactions
+        """
+    ).show()
+
+    print("=== Input/output count distribution per transaction (ordinary transactions only) ===")
+    con.sql(
+        """
+        SELECT min(len(vin)) AS min_inputs, round(avg(len(vin)), 2) AS avg_inputs, max(len(vin)) AS max_inputs,
+               min(len(vout)) AS min_outputs, round(avg(len(vout)), 2) AS avg_outputs, max(len(vout)) AS max_outputs
+        FROM transactions
+        WHERE NOT vin[1].is_coinbase
+        """
+    ).show()
+
+    print("=== Inputs whose referenced previous transaction is NOT in our loaded window ('foreign' inputs) ===")
+    con.sql(
+        """
+        WITH all_inputs AS (
+            SELECT t.txid, inp.txid AS previous_txid, inp.is_coinbase AS is_coinbase
+            FROM transactions t, UNNEST(t.vin) AS x(inp)
+        )
+        SELECT
+            count(*) FILTER (WHERE NOT is_coinbase) AS ordinary_input_count,
+            count(*) FILTER (
+                WHERE NOT is_coinbase
+                AND NOT EXISTS (SELECT 1 FROM transactions t2 WHERE t2.txid = all_inputs.previous_txid)
+            ) AS foreign_input_count
+        FROM all_inputs
+        """
+    ).show()
+    print("(These reference transactions outside our 10-block window -- expected, and covered in the walkthrough.)")
+
+    print("=== Outputs created AND spent within the loaded window (not a full UTXO set -- see note) ===")
+    con.sql(
+        """
+        WITH all_outputs AS (
+            SELECT t.txid, idx - 1 AS output_index
+            FROM transactions t, UNNEST(t.vout) WITH ORDINALITY AS o(out, idx)
+        ),
+        all_inputs AS (
+            SELECT inp.txid AS previous_txid, inp.vout AS previous_vout_index
+            FROM transactions t, UNNEST(t.vin) AS x(inp)
+            WHERE NOT inp.is_coinbase
+        )
+        SELECT
+            count(*) AS outputs_created_in_window,
+            count(*) FILTER (
+                WHERE EXISTS (
+                    SELECT 1 FROM all_inputs ai
+                    WHERE ai.previous_txid = all_outputs.txid
+                      AND ai.previous_vout_index = all_outputs.output_index
+                )
+            ) AS outputs_also_spent_in_window
+        FROM all_outputs
+        """
+    ).show()
+    print(
+        "NOTE: 'outputs created but not spent in window' is NOT the UTXO set -- it only means "
+        "no spending input for that output happens to be loaded. It may well be spent by a "
+        "transaction outside this window. See docs/PROJECT_STATE.md for the observation-boundary note."
+    )
 
 
 if __name__ == "__main__":

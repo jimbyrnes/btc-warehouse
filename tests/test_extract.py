@@ -116,6 +116,23 @@ def test_is_complete_requires_all_three_files(tmp_path):
     assert is_complete(block_dir)
 
 
+def test_is_complete_detects_incomplete_fetch_via_meta_counts(tmp_path):
+    block_dir = tmp_path / "0000100"
+    block_dir.mkdir()
+    (block_dir / "block.json").write_text("{}")
+    (block_dir / "txs.jsonl").write_text('{"txid": "a"}\n')
+
+    (block_dir / "_meta.json").write_text(
+        json.dumps({"tx_count_fetched": 1, "tx_count_reported": 5175})
+    )
+    assert not is_complete(block_dir)  # file existence alone is not enough
+
+    (block_dir / "_meta.json").write_text(
+        json.dumps({"tx_count_fetched": 5175, "tx_count_reported": 5175})
+    )
+    assert is_complete(block_dir)
+
+
 def test_ingest_block_skips_when_already_complete(tmp_path, monkeypatch):
     from btc_ingest.extract import ingest_block
 

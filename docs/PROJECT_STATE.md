@@ -1,6 +1,6 @@
 # Project state
 
-Last updated: 2026-07-24, end of Milestone 1.
+Last updated: 2026-07-26, end of Milestone 2.
 
 ## 1. Agreed architecture
 
@@ -37,11 +37,12 @@ Last updated: 2026-07-24, end of Milestone 1.
 ## 2. Milestone roadmap
 
 1. **One block** — fetch + explore locally with DuckDB. **Done.**
-2. Ten consecutive blocks — extend extractor to a small range, add first
-   Parquet flatten, validate multi-block chain linkage with DuckDB.
+2. **Ten consecutive blocks** — extend extractor to a small range, first
+   Parquet flatten, validate multi-block chain linkage with DuckDB. **Done.**
 3. ~25–50 blocks — DuckDB checks formalized as a data-quality gate before
    anything is considered load-ready; expect to see inputs referencing
-   transactions outside the loaded window.
+   transactions outside the loaded window (already observed in Milestone 2
+   at 10 blocks — see section 4 below).
 4. Snowflake + dbt staging/core models — Snowflake config introduced,
    isolated, still optional up to this point.
 5. Airflow 3 standalone DAG + the bounded UTXO derived model.
@@ -49,9 +50,11 @@ Last updated: 2026-07-24, end of Milestone 1.
    scheduled incremental ingestion, revisit Snowflake usage/cost at scale.
 
 **No milestone beyond the current one is approved until explicitly
-authorized.**
+authorized. Milestone 3 has not been approved.**
 
-## 3. What Milestone 1 implemented
+## 3. Implementation history
+
+### What Milestone 1 implemented
 
 - `btc_ingest/config.py` — API base URL (env-overridable), page size,
   paths, zero-pad width, default depth behind tip (100).
@@ -75,34 +78,104 @@ authorized.**
   idempotent skip on re-ingest.
 - No Airflow, Snowflake, or dbt installed or configured yet.
 
-## 4. Verified live-data result
+### What Milestone 2 added
 
-Block **959330** (mainnet, fetched when chain tip was 959430 — 100 blocks
-behind tip) was fetched from `https://mempool.space/api` and written to
-`data/raw/blocks/0959330/`:
+- `btc_ingest/config.py` — added `DATA_PARQUET_DIR`, `DEFAULT_RANGE_COUNT`
+  (10), `INTER_BLOCK_DELAY_SECONDS` (politeness pause between blocks in a
+  range fetch).
+- `btc_ingest/extract.py` — `is_complete()` strengthened to also validate
+  `tx_count_fetched == tx_count_reported` from `_meta.json`, not just file
+  existence; added `resolve_block_range()` (pure — takes `tip_height` as a
+  parameter rather than fetching it, so it's testable without network),
+  `ingest_block_range()` / `BlockRangeResult` (sequential, per-block
+  atomic/idempotent, one failure can't corrupt another block, records
+  fetched/skipped/failed), and `read_raw_block()` to load a previously
+  ingested block back into Python objects.
+- `btc_ingest/flatten.py` (new) — pure, network-free functions
+  (`flatten_block`, `flatten_transactions`, `flatten_inputs`,
+  `flatten_outputs`, `vsize_from_weight`) that turn raw JSON into row
+  dicts. Fields genuinely absent in the source (coinbase `prevout`,
+  addressless OP_RETURN outputs) are passed through as `None`, never
+  invented.
+- `btc_ingest/parquet_build.py` (new) — `write_parquet_partition_atomic`
+  (stages rows as NDJSON, loads through DuckDB's JSON reader for type
+  inference, writes to a temp Parquet file, `os.replace`s into place —
+  one height's partition never touches another's) and
+  `build_block_parquet_partitions` (flattens one block into its four
+  dataset partitions).
+- `scripts/fetch_blocks.py` (new) — range CLI: `--start-height`/
+  `--end-height`, `--start-height`/`--count`, or `--behind-tip`/`--count`
+  (default: 10 blocks ending 100 behind tip). Prints fetched/skipped/failed
+  and exits non-zero if the requested range isn't fully complete afterward.
+- `scripts/build_parquet.py` (new) — builds Parquet partitions for every
+  complete raw block on disk, or a specific height/range.
+- `scripts/explore_block.py` — extended (same file, same glob pattern,
+  which already worked across multiple blocks) with 8 more queries: chain
+  linkage across the window, tx count/fees by block, avg/max block weight,
+  avg tx size/weight/vsize, input/output count distribution per
+  transaction, "foreign" inputs (referencing a transaction outside the
+  window), and outputs created-and-spent within the window (explicitly
+  labeled as not a UTXO set).
+- Tests: `tests/test_range.py`, `tests/test_flatten.py`,
+  `tests/test_parquet_build.py` (new), plus one added test in
+  `tests/test_extract.py` for the strengthened completeness check.
+  28 tests total, all passing.
+- Still no Airflow, Snowflake, or dbt.
 
-- `tx_count_reported` (from block metadata) and `tx_count_fetched` (rows
-  actually written) both equal **5175** — confirmed via
-  `scripts/explore_block.py`'s completeness check.
-- `pages_fetched`: 208 (207 pages of 25 transactions + 1 terminating page).
-- Coinbase transaction identified (`vin[1].is_coinbase = true`), fee
-  distribution computed across the 5174 ordinary transactions
-  (min 10 sats, avg ~256.9 sats, max 100000 sats, total 1,328,954 sats),
-  and one sample transaction's inputs/outputs unnested into rows.
+## 4. Verified live-data results
+
+**Milestone 1** — block **959330** (mainnet, chain tip 959430 at fetch
+time, 100 blocks behind tip) was fetched from `https://mempool.space/api`:
+`tx_count_reported` and `tx_count_fetched` both **5175** (208 pages),
+coinbase transaction identified, fee distribution computed across 5174
+ordinary transactions (min 10 sats, avg ~256.9 sats, max 100000 sats,
+total 1,328,954 sats). This raw block directory was later deleted (it's
+regenerable and git-ignored) once it no longer fit cleanly into the
+Milestone 2 range — the verified result stands regardless.
+
+**Milestone 2** — 10 consecutive mainnet blocks, **heights 959744–959753**
+(chain tip 959853 at fetch time, range ending 100 behind tip), fetched
+from `https://mempool.space/api` and confirmed complete (`tx_count_fetched
+== tx_count_reported` for all 10):
+
+- Transactions: **51,907** total, of which **10** are coinbase (exactly
+  one per block, as expected).
+- Inputs: **77,968** total (77,958 ordinary + 10 coinbase).
+- Outputs: **115,732** total.
+- Chain linkage: each block's `previousblockhash` matches the prior
+  block's hash for all 9 internal links in the window (the first block's
+  predecessor is outside the window, as expected — not a break).
+- "Foreign" inputs (referencing a transaction not present in the loaded
+  window): **30,490** of 77,958 ordinary inputs — about 39%, expected at
+  this small window size since most spent outputs were created earlier
+  than our 10-block slice.
+- Outputs created **and** spent within the window: **47,468** of 115,732
+  created — the remainder are not "unspent," they're simply not matched
+  by a spending input inside this narrow slice. Explicitly not a UTXO set.
+- All four Parquet datasets built: 40 partition files total (4 datasets ×
+  10 heights) under `data/parquet/`.
 - All output lives under `data/`, which is git-ignored.
 
-## 5. Esplora pagination 404 edge case
+## 5. Edge cases discovered
 
-Block 959330's transaction count (5175) is an exact multiple of the page
-size (25). Esplora's `/block/:hash/txs/:start_index` endpoint returns
-**HTTP 404**, not an empty JSON array, once `start_index` reaches the
-total transaction count. The first implementation treated this as a fatal
-error and crashed on the real block. Fixed by introducing a `NotFoundError`
-in `btc_ingest/esplora.py` that is raised (without retry — a 404 here is
-not transient) and caught specifically inside `get_block_txs`'s page
-fetcher, treated as the end of pagination. Covered by
-`test_get_block_txs_treats_404_as_end_of_pagination` in
-`tests/test_extract.py`, so this behavior won't silently regress.
+**Esplora pagination 404 (Milestone 1).** Block 959330's transaction count
+(5175) was an exact multiple of the page size (25). Esplora's
+`/block/:hash/txs/:start_index` endpoint returns **HTTP 404**, not an
+empty JSON array, once `start_index` reaches the total transaction count.
+The first implementation treated this as fatal and crashed on the real
+block. Fixed with a `NotFoundError` in `btc_ingest/esplora.py` (raised
+without retry — a 404 here is not transient) caught specifically inside
+`get_block_txs`'s page fetcher and treated as end-of-pagination. Covered
+by `test_get_block_txs_treats_404_as_end_of_pagination`.
+
+**DuckDB UNNEST WITH ORDINALITY column reference (Milestone 2).** In the
+"outputs spent within window" query, `UNNEST(vout) WITH ORDINALITY AS
+o(out, idx)` produces `idx` as its own column, not a field on the `out`
+struct — an early draft wrote `out.idx` and DuckDB raised a binder error
+("could not find key idx in struct"). Fixed by referencing `idx` directly.
+Caught during live-data verification, not by a unit test — the SQL
+exploration script isn't part of the automated suite the way the pure
+flatten/range functions are.
 
 ## 6. Current commands
 
@@ -111,10 +184,13 @@ fetcher, treated as the end of pagination. Covered by
 python3 -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 
-# fetch (idempotent; skips if the block dir is already complete)
-python scripts/fetch_block.py                    # tip - 100 (default)
-python scripts/fetch_block.py --height 959330     # exact height
-python scripts/fetch_block.py --force             # re-fetch anyway
+# fetch a range (idempotent per block; skips already-complete blocks)
+python scripts/fetch_blocks.py                                   # 10 blocks ending tip-100
+python scripts/fetch_blocks.py --start-height 959744 --end-height 959753
+python scripts/fetch_blocks.py --force                           # re-fetch anyway
+
+# generate Parquet (derived, regenerable, safe to delete and rebuild)
+python scripts/build_parquet.py
 
 # explore the fetched block(s) with DuckDB
 python scripts/explore_block.py
@@ -125,13 +201,16 @@ python -m pytest
 
 ## 7. Next approved activity
 
-A **learning walkthrough** of the already-downloaded block 959330: reading
-through `block.json` and `txs.jsonl` together and connecting each field
-(height, weight vs size vs vsize, fee, coinbase, vin/vout, scriptpubkey,
-confirmations) to a plain-English analogy before touching any more code.
+A **learning walkthrough** of the downloaded 10-block window
+(959744–959753), covering: block height and chain linkage; transaction
+inputs and outputs; fee calculation; size, weight, and vsize; and why many
+inputs reference transactions outside the loaded window. This walkthrough
+has been proposed but not yet delivered — see `docs/LEARNING_LOG.md` for
+what's actually been covered so far (still just Milestone 1's technical
+mechanics, not concept explanations).
 
 ## 8. Milestone status
 
-**Milestone 2 has not been approved.** No ten-block extraction, no
-Parquet generation, no range-looping code should be started until that
-approval is given explicitly.
+**Milestone 3 has not been approved.** No 25–50 block extraction, no
+data-quality-gate formalization, no Snowflake/dbt/Airflow work should be
+started until that approval is given explicitly.
