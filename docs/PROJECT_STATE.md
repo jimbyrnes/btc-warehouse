@@ -1,8 +1,8 @@
 # Project state
 
-Last updated: 2026-07-28. Milestone 3 is complete (not yet committed —
-see the session that produced this update for the exact diff). Project
-is paused here — see section 7 for the exact resume point.
+Last updated: 2026-07-28. Milestone 3 is complete, committed
+(`baa8aac`), and pushed to `origin/main`. Project is paused here — see
+section 7 for the exact resume point.
 
 ## 1. Agreed architecture
 
