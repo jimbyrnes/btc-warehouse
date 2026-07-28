@@ -228,7 +228,7 @@ coinbase excluded from the ranking).
 python -m pytest
 ```
 
-57 tests total. Milestone 3 adds the `parquet_partitions_complete` skip
+43 tests total. Milestone 3 adds the `parquet_partitions_complete` skip
 check and 14 validator tests (using small synthetic DuckDB fixtures, no
 live API or real Parquet files needed) covering: a complete range
 passing cleanly, missing-height/duplicate-height/chain-link/tx-count/
@@ -236,3 +236,125 @@ coinbase-count/fee-mismatch/unresolved-reference failures, correct fee
 arithmetic and vsize validation, foreign references and addressless
 outputs correctly classified as expected boundaries (not failures), JSON
 report generation, and overall-status/exit-code semantics.
+
+## Milestone 4 — Snowflake landing + dbt staging/core models
+
+Adds a **warehouse layer** on top of the local pipeline, which keeps
+working exactly as before:
+
+```
+Validated local Parquet
+        v
+Snowflake RAW landing tables   (btc_ingest/snowflake_loader.py)
+        v
+dbt staging models             (dbt/models/staging/)
+        v
+dbt core models                (dbt/models/core/)
+        v
+dbt tests + docs
+```
+
+DuckDB stays the local exploration/validation lens; Snowflake+dbt are an
+*additional* target for the same validated data, not a replacement.
+Nothing in `data/raw/` or `data/parquet/` changes, and none of the
+Python/DuckDB commands from Milestones 1-3 are affected.
+
+**No live Snowflake account was available while building this milestone.**
+Every command below is documented and the code/SQL/dbt project are
+complete, but the "run against a real account" steps have not actually
+been executed — see `docs/PROJECT_STATE.md` for exactly what's verified
+vs. still pending.
+
+### 1. Install dependencies
+
+```bash
+pip install -r requirements.txt   # adds python-dotenv, snowflake-connector-python, dbt-core, dbt-snowflake
+```
+
+### 2. Set up credentials
+
+```bash
+cp .env.example .env
+# edit .env with your real Snowflake trial account details
+```
+
+`.env` is git-ignored. `btc_ingest/snowflake_loader.py` reads it
+automatically via `python-dotenv`. dbt does not read `.env` files itself
+— before any dbt command, export the values into your shell:
+
+```bash
+set -a && source .env && set +a
+```
+
+Copy `dbt/profiles.yml.example` (safe to commit — every value is an
+`env_var()` reference, no real credentials in it) to dbt's default
+global location:
+
+```bash
+mkdir -p ~/.dbt && cp dbt/profiles.yml.example ~/.dbt/profiles.yml
+```
+
+### 3. Create Snowflake objects (one-time, run manually in a Snowflake worksheet)
+
+```bash
+# paste the contents of snowflake/setup.sql into a Snowflake worksheet and run it
+cat snowflake/setup.sql
+```
+
+Creates database `BTC_WAREHOUSE`; schemas `RAW`/`STAGING`/`CORE`;
+warehouse `BTC_WAREHOUSE_WH` (XSMALL, auto-suspend 60s, auto-resume,
+created suspended); a Parquet file format and internal stage; and the
+four typed `RAW` landing tables.
+
+### 4. Load the 25-block dataset into Snowflake RAW tables
+
+```bash
+python scripts/load_snowflake.py --start-height 959744 --end-height 959768
+```
+
+Refuses to run unless `data/reports/validation_959744-959768.json`
+already exists and shows `overall_status: PASS` (from Milestone 3's
+`validate_dataset.py`). For each height and dataset: `PUT`s the local
+Parquet partition to an internal stage, `COPY INTO`s a temporary staging
+table, then `MERGE`s into the permanent `RAW` table on its natural key
+(blocks: `block_height+block_hash`; transactions: `txid`; inputs:
+`txid+input_index`; outputs: `txid+output_index`) — safe to re-run any
+number of times without duplicating rows.
+
+### 5. Run dbt
+
+```bash
+cd dbt
+dbt debug   # verifies the connection; requires a real, reachable Snowflake account
+dbt run     # builds stg_* views and the 4 core tables
+dbt test    # runs all column tests + the 5 singular cross-model tests
+dbt docs generate && dbt docs serve   # requires a live connection to introspect the warehouse
+```
+
+`dbt parse` is the one command that works **without** any live
+connection — it only validates project/YAML/Jinja syntax and that every
+`ref()`/`source()` resolves. Useful as an offline sanity check.
+
+### 6. Suspend the warehouse when done
+
+```sql
+ALTER WAREHOUSE BTC_WAREHOUSE_WH SUSPEND;
+```
+
+This is a 30-day/$400 trial, not a permanent free tier — suspend compute
+after every session.
+
+### Tests
+
+```bash
+python -m pytest
+```
+
+58 tests total. Milestone 4 adds `tests/test_snowflake_loader.py` (15
+tests, no network) covering: config/credential errors producing clear
+messages, generated PUT/COPY INTO/MERGE SQL structure for every dataset
+(including the composite natural keys and the quoted `SEQUENCE` reserved
+word), refusal to load without a passing validation report, and
+load-orchestration behavior with a mocked Snowflake connection — missing
+partitions and one dataset's failure are both recorded without stopping
+or corrupting the rest of the load.

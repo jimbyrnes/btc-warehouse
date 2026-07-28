@@ -1,0 +1,113 @@
+version: 2
+
+models:
+  - name: blocks
+    description: >
+      One row per block identity (block_height + block_hash). Grain is
+      enforced by the block_id surrogate key below, not by block_height
+      alone -- height can theoretically be shared across a fork.
+    columns:
+      - name: block_height
+        description: "The block's position in the chain."
+        tests:
+          - not_null
+      - name: block_hash
+        description: "The block's permanent, unique fingerprint."
+        tests:
+          - not_null
+      - name: block_id
+        description: "Surrogate key (block_height || '-' || block_hash) enforcing the composite natural key."
+        tests:
+          - unique
+          - not_null
+      - name: transaction_count
+        tests:
+          - nonnegative
+      - name: weight_units
+        tests:
+          - positive
+
+  - name: transactions
+    description: "One row per transaction across the loaded block window. txid is itself the natural key."
+    columns:
+      - name: txid
+        description: "The transaction's unique identifier -- the natural key for this model."
+        tests:
+          - unique
+          - not_null
+      - name: block_height
+        description: "Which loaded block this transaction belongs to."
+        tests:
+          - relationships:
+              arguments:
+                to: ref('blocks')
+                field: block_height
+      - name: transaction_index
+        description: "Position of this transaction within its block (0 is conventionally the coinbase transaction)."
+        tests:
+          - nonnegative
+      - name: fee_sats
+        description: "Nonnegative for ordinary transactions. Coinbase transactions are excluded -- their fee_sats is conventionally 0, not a market-priced fee."
+        tests:
+          - nonnegative:
+              config:
+                where: "not is_coinbase"
+
+  - name: transaction_inputs
+    description: >
+      One row per input position within a transaction (natural key:
+      txid + input_index).
+    columns:
+      - name: input_id
+        description: "Surrogate key (txid || '-' || input_index) enforcing the composite natural key."
+        tests:
+          - unique
+          - not_null
+      - name: txid
+        description: "Which transaction this input belongs to."
+        tests:
+          - relationships:
+              arguments:
+                to: ref('transactions')
+                field: txid
+      - name: previous_txid
+        description: >
+          Not_null is only enforced for ordinary (non-coinbase) inputs.
+          Coinbase inputs are allowed -- expected -- to lack a normal
+          previous-output reference, since there is no real prior
+          transaction being spent.
+        tests:
+          - not_null:
+              config:
+                where: "not is_coinbase"
+      - name: previous_vout_index
+        tests:
+          - not_null:
+              config:
+                where: "not is_coinbase"
+      - name: previous_output_value_sats
+        tests:
+          - nonnegative
+
+  - name: transaction_outputs
+    description: >
+      One row per output position within a transaction (natural key:
+      txid + output_index). Nullable addresses are allowed by design --
+      no not_null test on address -- since non-standard scripts (e.g.
+      OP_RETURN) legitimately have none.
+    columns:
+      - name: output_id
+        description: "Surrogate key (txid || '-' || output_index) enforcing the composite natural key."
+        tests:
+          - unique
+          - not_null
+      - name: txid
+        description: "Which transaction this output belongs to."
+        tests:
+          - relationships:
+              arguments:
+                to: ref('transactions')
+                field: txid
+      - name: value_sats
+        tests:
+          - nonnegative

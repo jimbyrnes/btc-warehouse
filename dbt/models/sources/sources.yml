@@ -1,0 +1,25 @@
+version: 2
+
+sources:
+  - name: raw_btc
+    description: >
+      Typed Snowflake landing tables loaded from validated local Parquet
+      by btc_ingest/snowflake_loader.py. Not VARIANT columns -- the local
+      Python/DuckDB pipeline already deterministically flattened this data
+      and passed the Milestone 3 quality gate before any of it reached
+      Snowflake. Snowflake's role starts here, not at raw JSON.
+    database: "{{ env_var('SNOWFLAKE_DATABASE', 'BTC_WAREHOUSE') }}"
+    schema: RAW
+    tables:
+      - name: blocks
+        identifier: BLOCKS
+        description: One row per ingested block.
+      - name: transactions
+        identifier: TRANSACTIONS
+        description: One row per transaction across the loaded block window.
+      - name: transaction_inputs
+        identifier: TRANSACTION_INPUTS
+        description: One row per input position within a transaction.
+      - name: transaction_outputs
+        identifier: TRANSACTION_OUTPUTS
+        description: One row per output position within a transaction.

@@ -1,0 +1,28 @@
+# Template only -- safe to commit, contains no real values, every field is
+# read from an environment variable at runtime via env_var().
+#
+# dbt does NOT read .env files itself (unlike the Python loader, which
+# uses python-dotenv). Before running any dbt command, export the values
+# from your .env into the shell:
+#
+#   set -a && source .env && set +a
+#
+# Then either:
+#   - copy this file to ~/.dbt/profiles.yml (dbt's default global location,
+#     outside any git repo -- recommended, zero risk of ever committing a
+#     real profile), or
+#   - point DBT_PROFILES_DIR at a directory containing a copy of this file.
+
+btc_warehouse:
+  target: dev
+  outputs:
+    dev:
+      type: snowflake
+      account: "{{ env_var('SNOWFLAKE_ACCOUNT') }}"
+      user: "{{ env_var('SNOWFLAKE_USER') }}"
+      password: "{{ env_var('SNOWFLAKE_PASSWORD') }}"
+      role: "{{ env_var('SNOWFLAKE_ROLE') }}"
+      database: "{{ env_var('SNOWFLAKE_DATABASE') }}"
+      warehouse: "{{ env_var('SNOWFLAKE_WAREHOUSE') }}"
+      schema: "{{ env_var('SNOWFLAKE_SCHEMA', 'RAW') }}"
+      threads: 2

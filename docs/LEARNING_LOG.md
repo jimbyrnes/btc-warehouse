@@ -147,7 +147,7 @@ session — no Bitcoin concepts were explained in this entry's work):**
   transactions versus 4,000+ for its neighbors — verified real (the
   block's own metadata reports the same count), not a fetch defect.
 - 14 new validator tests, all against small synthetic fixtures — no live
-  API or real Parquet files required for the test suite. 57 tests total,
+  API or real Parquet files required for the test suite. 43 tests total,
   all passing.
 
 **What has NOT been covered (unchanged from before, do not assume
@@ -160,3 +160,52 @@ comprehension questions still unanswered. All other Bitcoin concepts —
 inputs, outputs, fees, size/weight/vsize, foreign-window inputs, the
 bounded-UTXO idea — remain completely untaught, regardless of how much
 validation and analytical tooling now exists around that data.
+
+## 2026-07-28 — Milestone 4: Snowflake landing + dbt staging/core models
+
+**What was demonstrated technically (engineering, not a teaching session
+— no Bitcoin or warehouse concepts were explained to the user in this
+work; do not assume "warehouse," "staging," "MERGE," or "idempotent
+load" have been taught):**
+
+- Built a complete Snowflake + dbt layer on top of the same validated
+  25-block dataset from Milestone 3, without touching any of the local
+  extraction/Parquet/validation code: `snowflake/setup.sql` (database,
+  warehouse, schemas, file format, stage, four RAW tables),
+  `btc_ingest/snowflake_loader.py` (PUT -> COPY INTO temp table -> MERGE,
+  keyed on each dataset's natural key, refusing to run without a passing
+  Milestone 3 validation report for the exact requested range), and a
+  full dbt project (4 staging models, 4 core models with grain-enforcing
+  surrogate keys, 5 singular cross-model tests mirroring
+  `btc_ingest/validate.py`'s own checks).
+- **No live Snowflake account was available**, so this milestone's
+  verification looked different from 1-3: instead of running against
+  real data, verification meant confirming the code/SQL/dbt are
+  *correct and wired up*, not that they've been *exercised*. Concretely:
+  58 Python tests pass (15 new, all against a mocked Snowflake
+  connection — no network involved); the Milestone 3 DuckDB gate still
+  passes unchanged; `dbt parse` resolves all 8 models/26 tests/4 sources
+  with zero warnings; `dbt debug` against dummy credentials proved the
+  env-var wiring works (every connection field populated correctly) and
+  failed only at the network layer, exactly as expected for fake
+  credentials.
+- Found and fixed a real (if minor) issue by actually running the tool
+  rather than assuming: dbt 1.12 deprecates top-level `relationships`
+  test arguments and top-level `where` on custom tests in favor of
+  nested `arguments:`/`config:` blocks. Caught via `dbt parse`'s own
+  deprecation warnings, not guessed at.
+- Deliberately did *not* add a `SOURCE_BLOCK_HEIGHT` ingestion-metadata
+  column to the RAW tables, since `block_height` is already a genuine
+  Bitcoin-data column on every one of them — a judgment call favoring
+  "don't duplicate data just because a checklist suggests a metadata
+  column," made and documented rather than applied mechanically.
+
+**What has NOT been covered (unchanged, do not assume otherwise):**
+
+Same as every prior entry: the teaching walkthrough is still stuck at
+Lesson 1, five questions unanswered. This entry adds a second kind of
+"not yet covered" on top of that: nothing about *how a data warehouse
+works* (raw/staging/core layering, idempotent MERGE loads, why dbt
+separates casting from business logic) has been taught either — all of
+it exists in the repo now as working code, but none of it has been
+walked through with the user the way Lesson 1's Bitcoin concepts were.

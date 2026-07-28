@@ -1,0 +1,63 @@
+version: 2
+
+models:
+  - name: stg_blocks
+    description: >
+      Staging pass-through of RAW.BLOCKS: explicit casts, the raw Unix
+      epoch timestamp converted to a real TIMESTAMP_NTZ, ingestion
+      metadata kept separate from Bitcoin fields. No business logic.
+    columns:
+      - name: block_height
+        description: "The block's position in the chain -- a slot, not a permanent identity on its own (height alone can theoretically be shared by two competing blocks during a fork)."
+      - name: block_hash
+        description: "The block's permanent, unique fingerprint -- this, not height, is what actually identifies one specific block forever."
+      - name: previous_block_hash
+        description: "Points at the block_hash of the block this one was mined on top of. This single field is the entire chain-linkage mechanism -- see the chain-linkage tests on the core blocks model."
+      - name: block_timestamp
+        description: "Miner-reported block time, converted from the raw Unix epoch seconds stored in RAW.BLOCKS."
+      - name: transaction_count
+        description: "Number of transactions the block itself reports containing -- cross-checked against the actual number of loaded transaction rows by assert_block_tx_counts_match."
+      - name: weight_units
+        description: "SegWit block weight. Not the same unit as size_bytes -- see vsize on transactions for the per-transaction version of this distinction."
+
+  - name: stg_transactions
+    description: Staging pass-through of RAW.TRANSACTIONS.
+    columns:
+      - name: txid
+        description: "The transaction's unique identifier."
+      - name: is_coinbase
+        description: "True for the one special transaction per block that mints new bitcoin and collects the block's fees, rather than spending existing outputs. Every block has exactly one."
+      - name: fee_sats
+        description: "sum(input previous_output_value_sats) - sum(output value_sats), in satoshis. Always 0 for coinbase transactions by convention -- there's nothing being spent to derive a fee from."
+      - name: size_bytes
+        description: "Serialized transaction size in bytes, including witness data."
+      - name: weight_units
+        description: "SegWit weight: 3x the non-witness bytes plus 1x the witness bytes. Distinct from size_bytes and vsize -- this is precisely what the SegWit discount is about."
+      - name: vsize
+        description: "ceil(weight_units / 4) -- the SegWit-discounted virtual size actually used for fee-rate calculations, checked by assert_vsize_matches_formula."
+
+  - name: stg_transaction_inputs
+    description: Staging pass-through of RAW.TRANSACTION_INPUTS.
+    columns:
+      - name: previous_txid
+        description: >
+          The txid of the transaction whose output this input spends.
+          For a coinbase input this is conventionally all zeros -- there
+          is no real prior transaction being spent. May reference a
+          transaction outside the currently loaded 25-block window; that
+          is an expected consequence of a bounded observation window, not
+          a defect (see docs/PROJECT_STATE.md's observation-window notes).
+      - name: previous_output_value_sats
+        description: "The value of the output being spent, in satoshis. Null only for coinbase inputs, which have no real previous output to reference."
+      - name: sequence_number
+        description: "Renamed from the source's SEQUENCE column (a Snowflake reserved word) so downstream queries never need to quote it."
+
+  - name: stg_transaction_outputs
+    description: Staging pass-through of RAW.TRANSACTION_OUTPUTS.
+    columns:
+      - name: address
+        description: "Decoded recipient address, when the script type supports one. Null for non-standard scripts such as OP_RETURN -- an expected data shape, not a defect. See script_type for the corresponding classification."
+      - name: script_type
+        description: "The kind of locking script on this output (e.g. v0_p2wpkh, op_return, p2sh) -- determines whether address can be decoded at all."
+      - name: value_sats
+        description: "The output's value in satoshis -- becomes a future input's previous_output_value_sats, if and when this output is ever spent by a transaction we happen to load."

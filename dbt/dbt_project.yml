@@ -1,0 +1,22 @@
+name: "btc_warehouse"
+version: "1.0.0"
+config-version: 2
+
+profile: "btc_warehouse"
+
+model-paths: ["models"]
+test-paths: ["tests"]
+macro-paths: ["macros"]
+
+clean-targets:
+  - "target"
+  - "dbt_packages"
+
+models:
+  btc_warehouse:
+    staging:
+      +schema: staging
+      +materialized: view
+    core:
+      +schema: core
+      +materialized: table
