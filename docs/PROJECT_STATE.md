@@ -445,3 +445,13 @@ Snowflake and dbt are now in `requirements.txt` and have working
 code/SQL/dbt projects (Milestone 4), but **remain unverified against a
 live account** — do not treat their presence in the repo as evidence
 they've been exercised for real. Airflow remains completely uninstalled.
+
+**The next implementation step, whenever it happens, is creating or
+connecting a live Snowflake account and completing the verification that
+could not be done without one:** running `snowflake/setup.sql`, loading
+the 25-block dataset with `scripts/load_snowflake.py`, `dbt run`, `dbt
+test`, row-count reconciliation against local Parquet, and confirming
+the warehouse suspends. This is *finishing Milestone 4's verification*,
+not starting Milestone 5 — Milestone 5 (Airflow + bounded UTXO model)
+still requires separate explicit approval regardless of when that
+happens.
