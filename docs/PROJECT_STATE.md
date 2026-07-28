@@ -1,8 +1,8 @@
 # Project state
 
-Last updated: 2026-07-27. Milestone 2 is complete, committed, and pushed
-to `origin/main`. Project is paused here — see section 7 for the exact
-resume point.
+Last updated: 2026-07-28. Milestone 3 is complete (not yet committed —
+see the session that produced this update for the exact diff). Project
+is paused here — see section 7 for the exact resume point.
 
 ## 1. Agreed architecture
 
@@ -41,10 +41,10 @@ resume point.
 1. **One block** — fetch + explore locally with DuckDB. **Done.**
 2. **Ten consecutive blocks** — extend extractor to a small range, first
    Parquet flatten, validate multi-block chain linkage with DuckDB. **Done.**
-3. ~25–50 blocks — DuckDB checks formalized as a data-quality gate before
-   anything is considered load-ready; expect to see inputs referencing
-   transactions outside the loaded window (already observed in Milestone 2
-   at 10 blocks — see section 4 below).
+3. **25 consecutive blocks** — DuckDB checks formalized as a formal
+   pass/fail data-quality gate; inputs referencing transactions outside
+   the loaded window classified as an expected boundary condition, not a
+   failure. **Done.**
 4. Snowflake + dbt staging/core models — Snowflake config introduced,
    isolated, still optional up to this point.
 5. Airflow 3 standalone DAG + the bounded UTXO derived model.
@@ -52,7 +52,7 @@ resume point.
    scheduled incremental ingestion, revisit Snowflake usage/cost at scale.
 
 **No milestone beyond the current one is approved until explicitly
-authorized. Milestone 3 has not been approved.**
+authorized. Milestone 4 has not been approved.**
 
 ## 3. Implementation history
 
@@ -124,6 +124,47 @@ authorized. Milestone 3 has not been approved.**
   28 tests total, all passing.
 - Still no Airflow, Snowflake, or dbt.
 
+### What Milestone 3 added
+
+- `btc_ingest/config.py` — added `DATA_REPORTS_DIR` (`data/reports/`,
+  under the already git-ignored `data/`).
+- `btc_ingest/parquet_build.py` — added `parquet_partitions_complete()`
+  so a height's Parquet can be skipped when already up to date (raw data
+  is written once and never mutated, so existence is a sufficient
+  staleness check).
+- `scripts/build_parquet.py` — rewritten to skip up-to-date partitions
+  unless `--force`, isolate one height's build failure from the rest
+  (try/except per height, continues), report created/skipped/
+  missing-raw/failed separately, and exit non-zero if an explicitly
+  requested range ends up incomplete.
+- `btc_ingest/validate.py` (new) — the formal data-quality gate: 33 SQL
+  checks against a DuckDB connection with `blocks`/`transactions`/
+  `inputs`/`outputs` registered (real Parquet in production, tiny
+  synthetic tables in tests, so no network/files needed for tests).
+  Checks span block completeness, chain linkage, transaction/input/
+  output integrity, monetary consistency, and size/weight/vsize
+  invariants. Each check gets severity PASS / EXPECTED_BOUNDARY / WARN /
+  FAIL; only FAIL affects `overall_status`. `run_validation()` assembles
+  the full report (requested/observed heights, per-check results,
+  boundary metrics with counts+percentages, size/weight/vsize summary
+  stats, severity totals, overall status); `write_report_json()` and
+  `print_report()` handle output.
+- `scripts/validate_dataset.py` (new) — CLI wrapping `run_validation()`
+  against real Parquet, prints the report, writes JSON to
+  `data/reports/validation_<start>-<end>.json`, exits non-zero only on
+  overall FAIL.
+- `scripts/summarize_dataset.py` (new) — analytical summary (not
+  pass/fail): fees/fee-rate by block, avg/max block weight, avg tx
+  size/weight/vsize, input/output totals, % of inputs resolving inside
+  the window, % of outputs spent later within the window, output counts
+  by script type, addressless-output count, largest transactions by
+  weight, highest fee-rate transactions (coinbase excluded).
+- Tests: `tests/test_validate.py` (new, 14 tests against a small
+  synthetic 3-block fixture), plus one added test in
+  `tests/test_parquet_build.py` for `parquet_partitions_complete`.
+  57 tests total, all passing.
+- Still no Airflow, Snowflake, or dbt.
+
 ## 4. Verified live-data results
 
 **Milestone 1** — block **959330** (mainnet, chain tip 959430 at fetch
@@ -160,6 +201,29 @@ from `https://mempool.space/api` and confirmed complete (`tx_count_fetched
   live entirely under `data/`, which `.gitignore` excludes wholesale —
   neither raw JSON/JSONL nor Parquet files are ever committed.
 
+**Milestone 3** — 25 consecutive mainnet blocks, **heights
+959744–959768** (chain tip 959905 at fetch time), extending Milestone 2's
+window by reusing its 10 already-complete blocks unchanged and fetching
+15 new ones (959754–959768):
+
+- Blocks: **25**. Transactions: **123,125**. Inputs: **189,166**.
+  Outputs: **277,218**. Coinbase transactions: **25** (exactly one per
+  block).
+- Ordinary inputs resolving to a transaction inside the window
+  ("internal"): **125,933** of 189,141 (66.58%). Referencing a
+  transaction outside the window ("foreign", expected boundary):
+  **63,208** (33.42%).
+- Outputs spent by an input within the window: **125,933** of 277,218
+  (45.43%). Outputs with no address decoded (non-standard scripts, e.g.
+  OP_RETURN): **87,506** (31.57%).
+- **Formal quality gate: 33/33 checks resolved cleanly — 29 PASS, 4
+  EXPECTED_BOUNDARY, 0 WARN, 0 FAIL. Overall: PASS.** JSON report at
+  `data/reports/validation_959744-959768.json`.
+- The two independently-written scripts (`validate_dataset.py`'s
+  boundary metrics and `summarize_dataset.py`'s window-resolution
+  percentages) agree exactly on the same underlying counts — a useful
+  cross-check that both are computing the same thing correctly.
+
 ## 5. Edge cases discovered
 
 **Esplora pagination 404 (Milestone 1).** Block 959330's transaction count
@@ -181,6 +245,17 @@ Caught during live-data verification, not by a unit test — the SQL
 exploration script isn't part of the automated suite the way the pure
 flatten/range functions are.
 
+**Real data anomaly, not a bug (Milestone 3).** Block **959762** has only
+**35 transactions**, versus 4,000–6,600 for every other block in the
+25-block window — weight 27,059 and size 10,760 bytes, roughly two
+orders of magnitude smaller than its neighbors. Verified genuine, not a
+fetch defect: the block's own `block.json` reports `tx_count: 35`, and
+our `tx_count_fetched` matches it exactly. Real mainnet blocks
+occasionally come in this small (e.g. a block found quickly after the
+previous one, before the mempool/template had time to fill). All quality
+checks passed for this block same as any other — no special-casing was
+needed.
+
 ## 6. Current commands
 
 ```bash
@@ -190,13 +265,20 @@ pip install -r requirements.txt
 
 # fetch a range (idempotent per block; skips already-complete blocks)
 python scripts/fetch_blocks.py                                   # 10 blocks ending tip-100
-python scripts/fetch_blocks.py --start-height 959744 --end-height 959753
+python scripts/fetch_blocks.py --start-height 959744 --end-height 959768
 python scripts/fetch_blocks.py --force                           # re-fetch anyway
 
-# generate Parquet (derived, regenerable, safe to delete and rebuild)
-python scripts/build_parquet.py
+# generate Parquet (skips a height's partitions if already up to date)
+python scripts/build_parquet.py --start-height 959744 --end-height 959768
+python scripts/build_parquet.py --start-height 959744 --end-height 959768 --force
 
-# explore the fetched block(s) with DuckDB
+# formal data-quality gate (exits non-zero only on overall FAIL)
+python scripts/validate_dataset.py --start-height 959744 --end-height 959768
+
+# analytical summary (fees, weight, script types, window-resolution %)
+python scripts/summarize_dataset.py --start-height 959744 --end-height 959768
+
+# explore the fetched block(s) with DuckDB (teaching-oriented, ad hoc)
 python scripts/explore_block.py
 
 # test
@@ -205,8 +287,9 @@ python -m pytest
 
 ## 7. Next approved activity — resume point
 
-The **teaching walkthrough** of the downloaded 10-block window
-(959744–959753) has started, not finished:
+The **teaching walkthrough** of the loaded block window is still
+started, still not finished — this has not changed since Milestone 2,
+even though Milestone 3's engineering work has since been completed:
 
 - **Lesson 1 (block height and chain linkage) has been delivered** —
   explained in plain English with an analogy, connected to the real
@@ -214,22 +297,28 @@ The **teaching walkthrough** of the downloaded 10-block window
   corresponding `data/parquet/blocks/` columns (`block_hash`,
   `block_height`, `previous_block_hash`) for blocks 959744–959746 from
   our own dataset, and closed with five comprehension questions.
-- **The user's answers to those five questions have not yet been given
-  or reviewed.** Comprehension of Lesson 1 is therefore not confirmed —
-  see `docs/LEARNING_LOG.md`, which records that the lesson was taught,
-  not that it was learned.
+- **The user's answers to those five questions have still not been given
+  or reviewed.** Instead of answering them, the user approved and
+  directed Milestone 3's implementation, which is now done. Comprehension
+  of Lesson 1 remains unconfirmed — see `docs/LEARNING_LOG.md`.
 
 **Resume by:** reviewing the user's answers to Lesson 1's five questions
-first. Only after that should the walkthrough continue to the next
-topics in order: transaction inputs and outputs; fee calculation; size,
-weight, and vsize; and why many inputs reference transactions outside the
-loaded window. Do not skip ahead to those topics before Lesson 1 is
-actually resolved.
+first, whenever they're given. Only after that should the walkthrough
+continue to the next topics in order: transaction inputs and outputs;
+fee calculation; size, weight, and vsize; and why many inputs reference
+transactions outside the loaded window. The window is now 25 blocks
+(959744–959768) instead of 10, so later lessons have more real data to
+draw on, but the topic order and the unresolved Lesson 1 questions are
+unchanged. Do not skip ahead to those topics before Lesson 1 is actually
+resolved, and do not treat Milestone 3's completion as evidence that any
+Bitcoin concept has been learned — it's engineering/validation work, not
+a teaching activity.
 
 ## 8. Milestone status
 
-**Milestone 3 has not been approved.** No 25–50 block extraction, no
-data-quality-gate formalization, no Snowflake/dbt/Airflow work should be
-started until that approval is given explicitly. This is also true
-regardless of how the teaching walkthrough concludes — finishing the
-walkthrough does not itself constitute Milestone 3 approval.
+**Milestone 4 has not been approved.** No Snowflake, dbt, or Airflow
+installation or configuration, no price ingestion, no streaming, no
+dashboards, and no further milestone work should be started until that
+approval is given explicitly. Snowflake, dbt, and Airflow remain
+completely uninstalled — nothing beyond Python + DuckDB + pytest is in
+`requirements.txt`.

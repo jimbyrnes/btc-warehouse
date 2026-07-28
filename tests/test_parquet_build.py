@@ -1,7 +1,23 @@
 import duckdb
 import pytest
 
-from btc_ingest.parquet_build import build_block_parquet_partitions, write_parquet_partition_atomic
+from btc_ingest.parquet_build import (
+    build_block_parquet_partitions,
+    parquet_partitions_complete,
+    write_parquet_partition_atomic,
+)
+
+
+def test_parquet_partitions_complete_detects_missing_dataset(tmp_path):
+    assert not parquet_partitions_complete(tmp_path, 100)
+
+    write_parquet_partition_atomic(tmp_path / "blocks", 100, [{"a": 1}])
+    write_parquet_partition_atomic(tmp_path / "transactions", 100, [{"a": 1}])
+    write_parquet_partition_atomic(tmp_path / "inputs", 100, [{"a": 1}])
+    assert not parquet_partitions_complete(tmp_path, 100)  # outputs still missing
+
+    write_parquet_partition_atomic(tmp_path / "outputs", 100, [{"a": 1}])
+    assert parquet_partitions_complete(tmp_path, 100)
 
 
 def test_write_parquet_partition_atomic_roundtrip(tmp_path):

@@ -20,6 +20,7 @@ REQUEST_RETRY_BACKOFF_SECONDS = 0.5
 
 DATA_RAW_BLOCKS_DIR = "data/raw/blocks"
 DATA_PARQUET_DIR = "data/parquet"
+DATA_REPORTS_DIR = "data/reports"
 
 # Zero-padding width for block-height directory names, so lexical sort
 # matches numeric sort. 7 digits comfortably covers height for centuries.

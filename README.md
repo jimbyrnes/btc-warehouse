@@ -155,3 +155,84 @@ completeness check, deterministic flattening of block/transaction/input/
 output rows (including coinbase handling and the `vsize` formula), atomic
 Parquet partition replacement, and a chain-linkage SQL check against a
 small fixture.
+
+## Milestone 3 — 25 blocks, formal data-quality gate
+
+Extends Milestone 2's window from 10 to **25 consecutive blocks**
+(959744–959768), reusing all 10 previously-fetched blocks unchanged, and
+replaces "eyeball the DuckDB output" with a **formal, repeatable
+pass/fail validator** — the gate the dataset has to clear before it would
+ever be considered ready to load into Snowflake. Still no Airflow,
+Snowflake, or dbt.
+
+### Fetch the wider range (reuses existing blocks automatically)
+
+```bash
+python scripts/fetch_blocks.py --start-height 959744 --end-height 959768
+```
+
+### Build any missing Parquet partitions (skips ones already up to date)
+
+```bash
+python scripts/build_parquet.py --start-height 959744 --end-height 959768
+python scripts/build_parquet.py --start-height 959744 --end-height 959768 --force   # rebuild anyway
+```
+
+`build_parquet.py` now skips a height's partitions if all four dataset
+files already exist (raw data is written once and never mutated, so
+existence is a sufficient staleness check) unless `--force` is passed. A
+failure on one height doesn't stop the others, and the command exits
+non-zero if an explicitly requested range ends up incomplete.
+
+### Run the formal quality gate
+
+```bash
+python scripts/validate_dataset.py --start-height 959744 --end-height 959768
+```
+
+Runs 33 checks against the Parquet datasets via DuckDB, covering block
+completeness, chain linkage, transaction/input/output integrity, monetary
+consistency (`fee_sats = Σinput values − Σoutput values`), and
+size/weight/vsize invariants. Each check gets one of four severities:
+
+- **PASS** — invariant holds.
+- **EXPECTED_BOUNDARY** — not a defect, a necessary consequence of only a
+  bounded slice of the chain being loaded (foreign input references, the
+  first block's unverifiable predecessor, outputs not observed spent
+  within the window, outputs without a standard address). These never
+  fail the gate.
+- **WARN** — unusual but not proof of corruption.
+- **FAIL** — a real internal inconsistency. Only this fails the gate.
+
+Prints readable terminal output and writes a machine-readable JSON report
+to `data/reports/validation_<start>-<end>.json` (under the already
+git-ignored `data/`). Exit code is non-zero only on overall FAIL.
+
+### Run the analytical summary
+
+```bash
+python scripts/summarize_dataset.py --start-height 959744 --end-height 959768
+```
+
+Fees and fee rate by block, average/max block weight, average tx
+size/weight/vsize, input/output totals, the percentage of inputs that
+resolve inside the window vs. reference something outside it, the
+percentage of outputs spent later within the window, output counts by
+script type, outputs without a decoded address, and the largest/highest
+fee-rate transactions (`fee_rate_sats_per_vbyte = fee_sats / vsize`,
+coinbase excluded from the ranking).
+
+### Run tests
+
+```bash
+python -m pytest
+```
+
+57 tests total. Milestone 3 adds the `parquet_partitions_complete` skip
+check and 14 validator tests (using small synthetic DuckDB fixtures, no
+live API or real Parquet files needed) covering: a complete range
+passing cleanly, missing-height/duplicate-height/chain-link/tx-count/
+coinbase-count/fee-mismatch/unresolved-reference failures, correct fee
+arithmetic and vsize validation, foreign references and addressless
+outputs correctly classified as expected boundaries (not failures), JSON
+report generation, and overall-status/exit-code semantics.

@@ -24,6 +24,22 @@ from btc_ingest.flatten import (
     flatten_transactions,
 )
 
+DATASETS = ("blocks", "transactions", "inputs", "outputs")
+
+
+def parquet_partitions_complete(parquet_root: Path, block_height: int) -> bool:
+    """True if all four dataset partitions already exist for this height.
+
+    Raw block data is written once, atomically, and never mutated in
+    place (see write_block_atomic), so a height's Parquet partitions are
+    a pure function of already-complete raw data -- existence is a
+    sufficient staleness check, no content hashing needed.
+    """
+    return all(
+        (parquet_root / dataset / f"block_height={block_height}" / "data.parquet").exists()
+        for dataset in DATASETS
+    )
+
 
 def write_parquet_partition_atomic(dataset_root: Path, block_height: int, rows: list[dict]) -> Path:
     """Write one block-height partition's `data.parquet`, atomically.
