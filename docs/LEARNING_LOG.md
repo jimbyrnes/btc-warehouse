@@ -209,3 +209,51 @@ works* (raw/staging/core layering, idempotent MERGE loads, why dbt
 separates casting from business logic) has been taught either — all of
 it exists in the repo now as working code, but none of it has been
 walked through with the user the way Lesson 1's Bitcoin concepts were.
+
+## 2026-07-31 — Milestone 4 live verification: real Snowflake account
+
+**What was demonstrated technically (engineering, not a teaching
+session — same disclaimer as the Milestone 4 entry above, now doubly
+true: none of this was walked through with the user as a concept, it
+was executed and verified):**
+
+- All of Milestone 4's code/SQL/dbt, previously verified only offline,
+  was run for real against a live Snowflake trial account: infrastructure
+  creation (`snowflake/setup.sql`), the RAW load (`scripts/load_snowflake.py`),
+  and `dbt run`/`dbt test`.
+- RAW load: 100/100 (height, dataset) partitions loaded, 0 failed, exact
+  row-count reconciliation against local Parquet (25 blocks, 123,125
+  transactions, 189,166 inputs, 277,218 outputs), zero natural-key
+  duplicate violations. Warehouse suspended after.
+- `dbt run` failed on the first attempt and was fixed live: `stg_blocks.sql`
+  referenced a column as `"timestamp"` (lowercase, quoted) when it had
+  been created as `"TIMESTAMP"` (uppercase, quoted) — Snowflake treats
+  quoted identifiers as case-sensitive, so these were different columns
+  as far as the database was concerned. One-line fix; full re-run then
+  passed cleanly (8/8 models).
+- `dbt test`: 26/26 passed against the live warehouse, including every
+  singular cross-model test mirroring `btc_ingest/validate.py`'s own
+  checks. CORE row counts independently reconciled against both RAW and
+  local Parquet via direct SQL, not just dbt's own summary.
+- A second, unrelated bug was hit and fixed *before* any of the above:
+  a first attempt to run `snowflake/setup.sql` manually via a throwaway
+  Python script used a naive comment-stripping regex that corrupted
+  `COMMENT = '...'` string literals containing a literal `--` as
+  ordinary text. Fixed by using the Snowflake connector's own
+  comment/string-aware statement splitter instead. This was a bug in
+  the one-off execution script, not in any committed file.
+- A credential-handling near-miss occurred and was caught before any
+  harm: the user initially pasted real Snowflake credentials into
+  `.env.example` (the committed template) instead of `.env` (the
+  git-ignored real file). Caught before anything was staged or
+  committed; `.env.example` was restored to placeholders and the real
+  values moved to `.env`. No credential ever reached git history.
+
+**What has NOT been covered (unchanged, do not assume otherwise):**
+
+Still exactly Lesson 1, still five unanswered questions, still nothing
+taught about warehouse concepts. This entry is pure "did it work when
+run for real" verification — running dbt successfully against a live
+warehouse is not the same as the user understanding what a warehouse,
+MERGE, or idempotent load *is*, and nothing here should be read as
+implying otherwise.

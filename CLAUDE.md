@@ -29,13 +29,15 @@ each with a plain-English analogy — not just to get a pipeline running.
 - **Python** — extraction only.
 - **DuckDB** — local exploration/validation lens over raw JSON and derived
   Parquet. Not the production warehouse, never a second copy of truth.
-- **Snowflake** — dbt's warehouse target. Wired up as of Milestone 4
-  (`snowflake/setup.sql`, `btc_ingest/snowflake_loader.py`) but treat as
-  unverified until `docs/PROJECT_STATE.md` records a live account run.
+- **Snowflake** — dbt's warehouse target. Wired up and **live-verified**
+  as of Milestone 4 (`snowflake/setup.sql`, `btc_ingest/snowflake_loader.py`)
+  against a real trial account — see `docs/PROJECT_STATE.md` for results.
   Config stays env-var-driven and isolated; no credentials are ever
   committed.
-- **dbt** — staging/core models, tests, and docs exist as of Milestone 4
-  (`dbt/`). The bounded UTXO model is still deferred to Milestone 5.
+- **dbt** — staging/core models, tests, and docs exist and are
+  **live-verified** as of Milestone 4 (`dbt/`) — `dbt run`/`dbt test`
+  both passed against the real warehouse. The bounded UTXO model is
+  still deferred to Milestone 5.
 - **Airflow 3, standalone mode** — eventual orchestration of bounded batch
   jobs. SQLite + LocalExecutor only.
 

@@ -259,11 +259,12 @@ DuckDB stays the local exploration/validation lens; Snowflake+dbt are an
 Nothing in `data/raw/` or `data/parquet/` changes, and none of the
 Python/DuckDB commands from Milestones 1-3 are affected.
 
-**No live Snowflake account was available while building this milestone.**
-Every command below is documented and the code/SQL/dbt project are
-complete, but the "run against a real account" steps have not actually
-been executed — see `docs/PROJECT_STATE.md` for exactly what's verified
-vs. still pending.
+**Live-verified against a real Snowflake trial account** (see
+`docs/PROJECT_STATE.md` for full results): infrastructure created, the
+25-block dataset loaded into RAW with an exact row-count/natural-key
+reconciliation, and `dbt run`/`dbt test` both executed successfully
+against CORE. `dbt docs generate`/`dbt docs serve` have not been run yet
+— everything else in this milestone has.
 
 ### 1. Install dependencies
 

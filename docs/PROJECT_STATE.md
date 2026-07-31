@@ -1,10 +1,12 @@
 # Project state
 
-Last updated: 2026-07-28. Milestone 4 is complete **at the code/SQL/dbt
-level only** — no live Snowflake account was available, so nothing has
-actually been loaded or run against a real warehouse yet. Project is
-paused here — see section 7 for the exact resume point (unchanged from
-before: still a teaching walkthrough, not implementation).
+Last updated: 2026-07-31. Milestone 4 is complete and **live-verified**
+against a real Snowflake trial account: infrastructure created, the
+validated 25-block dataset loaded into RAW (exact reconciliation, zero
+duplicate-key violations), and `dbt run`/`dbt test` both executed
+successfully against CORE (8/8 models, 26/26 tests). Project is paused
+here — see section 7 for the exact resume point (unchanged from before:
+still a teaching walkthrough, not implementation).
 
 ## 1. Agreed architecture
 
@@ -13,16 +15,19 @@ before: still a teaching walkthrough, not implementation).
 - **DuckDB** — local exploration/validation lens, queried directly against
   raw JSON/JSONL and (later) derived Parquet. Not a production warehouse
   and not a second copy of the data.
-- **Snowflake** — dbt's target, now wired up (database/schemas/warehouse/
-  stage/RAW tables defined in `snowflake/setup.sql`, loader in
-  `btc_ingest/snowflake_loader.py`) but **not yet verified against a live
-  account** — no credentials were available when Milestone 4 was built.
-  Config stays env-var-driven and isolated either way.
+- **Snowflake** — dbt's target, wired up in Milestone 4 and now
+  **live-verified**: `snowflake/setup.sql` (database, warehouse, 3
+  schemas, file format, stage, 4 RAW tables) was executed against a real
+  trial account, and the validated 25-block dataset was loaded into RAW
+  via `btc_ingest/snowflake_loader.py` with an exact row-count and
+  natural-key reconciliation. Config stays env-var-driven and isolated;
+  no credentials are ever committed.
 - **dbt** — staging models (`dbt/models/staging/`) and core models
-  (`dbt/models/core/`) exist and parse cleanly (`dbt parse` succeeds
-  offline), with tests and docs written, but `dbt run`/`dbt test`/
-  `dbt docs generate` all require a live connection and have not been
-  executed. The bounded UTXO model is still deferred to Milestone 5.
+  (`dbt/models/core/`) are **live-verified**: `dbt run` and `dbt test`
+  both executed successfully against the real warehouse (8/8 models,
+  26/26 tests), and CORE row counts were independently reconciled
+  against RAW and local Parquet. `dbt docs generate`/`serve` has not been
+  run yet. The bounded UTXO model is still deferred to Milestone 5.
 - **Airflow 3, standalone mode** (SQLite + LocalExecutor) — eventual
   orchestration. No Kubernetes, Celery, Redis, or separate Postgres
   container. Parallelism will later be capped (e.g. parallelism=2, max 2
@@ -54,10 +59,12 @@ before: still a teaching walkthrough, not implementation).
    failure. **Done.**
 4. **Snowflake landing + dbt staging/core models** — RAW landing tables,
    dbt staging/core models, tests, and docs all written; loader refuses
-   to run without a passing Milestone 3 validation report. **Code/SQL/dbt
-   complete; live execution against a real Snowflake account is still
-   pending (no account was available) — see section 4 for exactly what
-   is and isn't verified.**
+   to run without a passing Milestone 3 validation report. **Done and
+   live-verified**: infrastructure created, 25-block dataset loaded
+   (100/100 partitions, exact reconciliation, zero duplicate-key
+   violations), `dbt run`/`dbt test` both passed (8/8 models, 26/26
+   tests), CORE reconciled against RAW and local Parquet, warehouse
+   suspended after each session — see section 4 for full results.
 5. Airflow 3 standalone DAG + the bounded UTXO derived model.
 6. (Deferred, not part of the "first five") Rolling 100–300 block window,
    scheduled incremental ingestion, revisit Snowflake usage/cost at scale.
@@ -227,6 +234,9 @@ authorized. Milestone 5 has not been approved.**
   58 tests total, all passing.
 - `.gitignore` — added `profiles.yml` (defensive; the real template is
   `profiles.yml.example`), `dbt/target/`, `dbt/dbt_packages/`, `dbt/logs/`.
+- `dbt/models/staging/stg_blocks.sql` — fixed during live verification: a
+  quoted-identifier case mismatch against `RAW.BLOCKS`'s `"TIMESTAMP"`
+  column. See section 5 for the full story.
 - Airflow remains uninstalled.
 
 ## 4. Verified live-data results
@@ -288,25 +298,49 @@ window by reusing its 10 already-complete blocks unchanged and fetching
   percentages) agree exactly on the same underlying counts — a useful
   cross-check that both are computing the same thing correctly.
 
-**Milestone 4** — no live Snowflake account was available. What was
-actually verified, precisely:
+**Milestone 4 — live-verified** against a real Snowflake trial account
+(2026-07-31), after an initial code-only pass (2026-07-28) that had no
+account available. Full live results:
 
-- **Locally verified:** all 58 Python tests pass; the Milestone 3 DuckDB
-  quality gate still passes unchanged (29 PASS, 4 EXPECTED_BOUNDARY, 0
-  WARN, 0 FAIL) — Milestone 4 touched none of the extraction/Parquet/
-  validation code paths; `dbt parse` succeeds with zero warnings (8
-  models, 26 data tests, 4 sources all resolve); `dbt debug` against
-  dummy credentials correctly shows every connection field populated
-  from environment variables (proving the env-var wiring works) and
-  fails only at the actual network layer (`404 Not Found` contacting
-  `dummy-account.snowflakecomputing.com`) — the expected, correct failure
-  mode for fake credentials, not a project error.
-- **Not verified (requires a live account):** creating any Snowflake
-  object from `snowflake/setup.sql`; `PUT`/`COPY INTO`/`MERGE` actually
-  executing; any row landing in `RAW.*`; `dbt run`, `dbt test`, `dbt docs
-  generate`; row-count reconciliation between local Parquet (25 blocks,
-  123,125 transactions, 189,166 inputs, 277,218 outputs) and Snowflake
-  RAW/core tables; warehouse suspension.
+*Infrastructure (`snowflake/setup.sql`):*
+- Database `BTC_WAREHOUSE`; schemas `RAW`, `STAGING`, `CORE`.
+- Warehouse `BTC_WAREHOUSE_WH`: **X-Small**, `auto_suspend=60`,
+  `auto_resume=true` — confirmed via `SHOW WAREHOUSES`.
+- File format `PARQUET_FORMAT`; internal stage `PARQUET_STAGE`.
+- Four typed RAW tables: `BLOCKS`, `TRANSACTIONS`, `TRANSACTION_INPUTS`,
+  `TRANSACTION_OUTPUTS`.
+- Executed via the Snowflake connector's own comment/string-aware
+  statement splitter, not hand-rolled parsing — see section 5 for why.
+
+*RAW load (`scripts/load_snowflake.py`, heights 959744–959768):*
+- **100/100 (height, dataset) partitions loaded, 0 skipped, 0 failed** —
+  ~4m14s elapsed.
+- RAW row counts reconcile exactly against local Parquet: **25 blocks,
+  123,125 transactions, 189,166 transaction_inputs, 277,218
+  transaction_outputs.**
+- Natural-key duplicate checks — blocks (`block_height+block_hash`),
+  transactions (`txid`), inputs (`txid+input_index`), outputs
+  (`txid+output_index`) — **zero violations on all four.**
+- Warehouse explicitly suspended after load, confirmed `SUSPENDED`.
+
+*dbt run / dbt test:*
+- First `dbt run` attempt failed on `stg_blocks` (quoted-identifier case
+  mismatch, see section 5); fixed; full re-run succeeded: **8/8 models
+  (4 staging views, 4 core tables), 0 errors, 0 warnings.**
+- `dbt test`: **26/26 tests passed, 0 warnings** — all 5 singular
+  cross-model tests (block/tx-count match, one-coinbase-per-block,
+  internal-input-resolution, fee arithmetic, vsize formula) and every
+  generic column test (uniqueness, not-null, relationships, the custom
+  `nonnegative`/`positive` tests).
+- CORE row counts independently reconciled via direct SQL (not just
+  dbt's own log) against both RAW and local Parquet: **25 / 123,125 /
+  189,166 / 277,218 — exact match at both layers.**
+- Warehouse explicitly suspended again after the dbt session, confirmed
+  `SUSPENDED`.
+
+*Not yet done:* `dbt docs generate`/`dbt docs serve` (the documentation
+site) has not been run. Everything else in Milestone 4's original scope
+has been executed and verified live.
 
 ## 5. Edge cases discovered
 
@@ -351,6 +385,30 @@ arguments nested under `arguments:` and test-level `where` filters nested
 under `config:`. Fixed in all four occurrences; `dbt parse` now runs with
 zero warnings. Caught by actually running `dbt parse` against the real
 installed dbt version, not by guessing at syntax.
+
+**Snowflake quoted-identifier case sensitivity — two separate bugs, both
+caught during live Milestone 4 verification (2026-07-31).**
+
+1. *Manual `setup.sql` execution.* The first attempt to run
+   `snowflake/setup.sql` used a one-off Python script with a naive regex
+   to strip `--` SQL comments before splitting statements on `;`.
+   Several `COMMENT = '...'` values in the file intentionally contain a
+   literal `--` as a text separator (e.g. `'...educational project --
+   Milestone 4'`), and the regex corrupted those string literals,
+   producing unrelated cascading syntax errors. Fixed by using the
+   Snowflake connector's own comment/string-aware statement splitter
+   (`snowflake.connector.util_text.split_statements`) instead of
+   hand-rolled parsing. No changes were needed to `snowflake/setup.sql`
+   itself — the bug was entirely in the throwaway execution script.
+2. *dbt model.* `dbt/models/staging/stg_blocks.sql` referenced the
+   epoch-timestamp column as `"timestamp"` (lowercase, quoted).
+   `snowflake/setup.sql` created it as `"TIMESTAMP"` (uppercase, quoted).
+   Snowflake treats quoted identifiers as case-sensitive, so these are
+   two different identifiers — `dbt run` failed with `invalid identifier
+   '"timestamp"'`. Fixed by matching the exact case used at table-creation
+   time. Caught by actually running `dbt run` against the live warehouse
+   — `dbt parse` (no live connection) has no way to catch this, since it
+   never validates identifiers against real table metadata.
 
 ## 6. Current commands
 
@@ -406,8 +464,9 @@ python -m pytest
 
 The **teaching walkthrough** of the loaded block window is still
 started, still not finished — this has not changed since Milestone 2,
-even though both Milestone 3's and now Milestone 4's engineering work
-have since been completed:
+even though Milestone 3's and now Milestone 4's engineering work
+(including its full live Snowflake/dbt verification) have since been
+completed:
 
 - **Lesson 1 (block height and chain linkage) has been delivered** —
   explained in plain English with an analogy, connected to the real
@@ -441,17 +500,21 @@ configuration, no bounded UTXO model, no price ingestion, no streaming,
 no dashboards, and no further milestone work should be started until
 that approval is given explicitly.
 
-Snowflake and dbt are now in `requirements.txt` and have working
-code/SQL/dbt projects (Milestone 4), but **remain unverified against a
-live account** — do not treat their presence in the repo as evidence
-they've been exercised for real. Airflow remains completely uninstalled.
+Snowflake and dbt (Milestone 4) are now **fully live-verified**:
+infrastructure created in a real trial account, the 25-block dataset
+loaded into RAW with exact reconciliation, and `dbt run`/`dbt test` both
+passed against CORE — see section 4 for the complete results. Airflow
+remains completely uninstalled.
 
-**The next implementation step, whenever it happens, is creating or
-connecting a live Snowflake account and completing the verification that
-could not be done without one:** running `snowflake/setup.sql`, loading
-the 25-block dataset with `scripts/load_snowflake.py`, `dbt run`, `dbt
-test`, row-count reconciliation against local Parquet, and confirming
-the warehouse suspends. This is *finishing Milestone 4's verification*,
-not starting Milestone 5 — Milestone 5 (Airflow + bounded UTXO model)
-still requires separate explicit approval regardless of when that
-happens.
+The one piece of Milestone 4's original scope not yet exercised live is
+`dbt docs generate`/`dbt docs serve` (the documentation site) — not
+required for the milestone to be considered complete, and doesn't need
+further approval to run since it's read-only against already-verified
+models.
+
+**The next activity, whenever resumed, is the paused teaching
+walkthrough (section 7) — not further engineering work.** Milestone 4's
+live verification is engineering/warehouse work, same as its
+implementation was; it does not constitute or substitute for any part of
+the teaching walkthrough, and does not require or imply Milestone 5
+approval.
